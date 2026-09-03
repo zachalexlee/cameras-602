@@ -9,7 +9,7 @@ export function SiteHeader() {
         <div className="flex items-center gap-3">
           <Emblem className="h-7 w-7 text-accent" />
           <div className="leading-tight">
-            <div className="glow font-mono text-base font-semibold tracking-[0.2em] text-foreground">HOME OPS</div>
+            <div className="glow whitespace-nowrap font-mono text-base font-semibold tracking-[0.2em] text-foreground">HOME OPS</div>
             <div className="label hidden whitespace-nowrap text-muted sm:block">Surveillance console</div>
           </div>
         </div>
