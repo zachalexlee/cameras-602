@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/*
+ * "Intel console" theme. Dark by default: this dashboard lives on wall-mounted,
+ * always-on screens. Tokens are the single source of truth; components use the
+ * Tailwind color names mapped below (bg-surface, text-muted, border-line, ...).
+ */
+:root {
+  --bg: #060a0d;
+  --bg-elev: #0b1117;
+  --surface: rgba(11, 17, 23, 0.82);
+  --surface-hover: rgba(18, 27, 36, 0.9);
+  --line: #1b2933;
+  --line-strong: #2b4252;
+  --fg: #d6e2ea;
+  --muted: #6f8796;
+  --accent: #5cc8e8;
+  --ok: #3fd47c;
+  --warn: #e5b043;
+  --danger: #ef5a5a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-elev: var(--bg-elev);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-foreground: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-plex-mono);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  color: var(--fg);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--bg);
+  /* Faint blueprint grid. */
+  background-image:
+    linear-gradient(to right, rgba(92, 200, 232, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(92, 200, 232, 0.035) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+/* Full-screen vignette + very light scanlines. Purely decorative, no pointer events. */
+.screen-overlay {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background:
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.09) 0 1px, transparent 1px 4px);
+}
+
+/* Uppercase monospaced micro-label used for panel titles, readouts and buttons. */
+.label {
+  font-family: var(--font-plex-mono), ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.glow {
+  text-shadow: 0 0 14px rgba(92, 200, 232, 0.35);
+}
+
+/* Corner brackets for panels: apply .corners to a relatively positioned element. */
+.corners::before,
+.corners::after,
+.corners > .corner-b::before,
+.corners > .corner-b::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: rgba(92, 200, 232, 0.55);
+  border-style: solid;
+}
+.corners::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.corners::after { top: -1px; right: -1px; border-width: 1px 1px 0 0; }
+.corners > .corner-b::before { bottom: -1px; left: -1px; border-width: 0 0 1px 1px; }
+.corners > .corner-b::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+/* Slow status pulse for "live"/"online" dots. */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 212, 124, 0.45); }
+  50% { opacity: 0.75; box-shadow: 0 0 0 5px rgba(63, 212, 124, 0); }
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--ok);
+  animation: status-pulse 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot { animation: none; }
+}
