@@ -1,20 +1,17 @@
 import { CameraGrid } from "@/components/camera-grid";
 import { NewsTicker } from "@/components/news-ticker";
-import { Panel } from "@/components/panel";
+import { NotesTile } from "@/components/notes-tile";
+import { RadioTile } from "@/components/radio-tile";
 import { SiteHeader } from "@/components/site-header";
+import { WeatherTile } from "@/components/weather-tile";
 import { googleConfigured } from "@/lib/google";
-
-// Tiles that land in Phase 3.
-const PENDING_MODULES: Array<{ title: string; detail: string }> = [
-  { title: "Weather", detail: "NWS · Tacoma, WA" },
-  { title: "Notes", detail: "Checklist + scratchpad" },
-  { title: "Radio", detail: "Tacoma PD dispatch" },
-];
+import { radioConfig } from "@/lib/radio";
 
 export const dynamic = "force-dynamic";
 
 export default function DashboardPage() {
   const linked = googleConfigured();
+  const radio = radioConfig();
 
   return (
     <div className="flex flex-1 flex-col">
@@ -24,13 +21,10 @@ export default function DashboardPage() {
       <main className="flex flex-1 flex-col gap-4 p-4 sm:p-6">
         <CameraGrid />
 
-        <section className="grid gap-4 sm:grid-cols-3">
-          {PENDING_MODULES.map((m) => (
-            <Panel key={m.title} title={m.title} meta="Pending" bodyClassName="min-h-24 justify-center px-3 py-3">
-              <p className="label text-muted">{m.detail}</p>
-              <p className="label mt-1 text-[10px] text-muted/70">Module arrives in Phase 3</p>
-            </Panel>
-          ))}
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Dashboard modules">
+          <WeatherTile />
+          <NotesTile />
+          <RadioTile config={radio} />
         </section>
       </main>
 
@@ -44,7 +38,7 @@ export default function DashboardPage() {
         <span className="label text-muted">
           Uplink {linked ? <span className="text-ok">linked</span> : <span className="text-warn">not linked</span>}
         </span>
-        <span className="label ml-auto text-muted">Home Ops · v0.2</span>
+        <span className="label ml-auto text-muted">Home Ops · v0.3</span>
       </footer>
     </div>
   );

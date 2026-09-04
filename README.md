@@ -2,7 +2,7 @@
 
 A personal, password-protected web dashboard for Google Nest cameras, plus clock, weather, news ticker, notes and a Tacoma PD scanner. Next.js App Router, TypeScript, Tailwind. Hosted on Vercel.
 
-Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **Phase 2 (live camera grid) + news ticker**. Weather, notes and radio tiles are Phase 3.
+Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **Phase 3 complete** — cameras, news ticker, weather, notes, and radio. Phase 4 (hardening/polish) is next.
 
 ## Local dev
 
@@ -29,6 +29,7 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 | `SDM_PROJECT_ID` | Phase 2 | Google Device Access project id |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Phase 2 | OAuth web client |
 | `GOOGLE_REFRESH_TOKEN` | Phase 2 | from the one-time linking flow (`docs/google-setup.md`) |
+| `BROADCASTIFY_FEEDS` | optional | `Label\|feedId` pairs for the radio tile (default: Tacoma PD South, 15521) |
 | `BROADCASTIFY_STREAM_URL` | optional | premium direct stream; otherwise the embed player is used |
 | `NEWS_FEEDS` | optional | comma-separated RSS URLs overriding the defaults |
 
@@ -45,6 +46,10 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 - `POST /api/cameras/[id]/stream` relays WebRTC negotiation: `{ offerSdp }` → answer, `{ extend: mediaSessionId }` before the ~5-minute expiry, `{ stop: mediaSessionId }` on teardown. Video flows browser ↔ Google directly; the server never sees it. The browser never receives a Google access token.
 - Each `CameraTile` reconnects with exponential backoff (3s → 60s), renews the stream 60s before expiry, and retries immediately when the tab becomes visible or the network comes back.
 - `GET /api/news` merges the RSS feeds in `src/lib/news.ts` (or `NEWS_FEEDS`), round-robin so no outlet dominates, cached 10 min. `?debug=1` shows which feeds responded.
+
+- Weather is fetched in the browser from api.weather.gov for Tacoma (47.2529, -122.4443), refreshed every 15 minutes; the last good reading stays on screen if NWS is down.
+- Notes persist in the browser's localStorage (per device). Upgrade path: Vercel KV.
+- Radio embeds Broadcastify's web player per feed; set `BROADCASTIFY_STREAM_URL` for a premium direct stream.
 
 To add or remove a feed, set `NEWS_FEEDS` in Vercel (format in `.env.example`) and redeploy. To add or remove a camera, re-run `/api/google/connect` and toggle it on Google's screen.
 
