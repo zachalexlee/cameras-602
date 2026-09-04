@@ -2,7 +2,7 @@
 
 A personal, password-protected web dashboard for Google Nest cameras, plus clock, weather, news ticker, notes and a Tacoma PD scanner. Next.js App Router, TypeScript, Tailwind. Hosted on Vercel.
 
-Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **Phase 1 (skeleton + auth)**.
+Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **Phase 2 (live camera grid) + news ticker**. Weather, notes and radio tiles are Phase 3.
 
 ## Local dev
 
@@ -38,6 +38,15 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 - `POST /api/auth/login` compares the password in constant time, then sets an `HttpOnly; Secure; SameSite=Lax` cookie containing an HMAC-SHA256 signed token that expires after 30 days.
 - Login attempts are rate limited per IP: 5 failures per 15 minutes (in-memory, per serverless instance).
 - Rotate `AUTH_SECRET` to sign everyone out.
+
+## Cameras and news
+
+- `GET /api/cameras` lists camera-capable Nest devices (server-side SDM call, cached 5 min). `?refresh=1` bypasses the cache.
+- `POST /api/cameras/[id]/stream` relays WebRTC negotiation: `{ offerSdp }` → answer, `{ extend: mediaSessionId }` before the ~5-minute expiry, `{ stop: mediaSessionId }` on teardown. Video flows browser ↔ Google directly; the server never sees it. The browser never receives a Google access token.
+- Each `CameraTile` reconnects with exponential backoff (3s → 60s), renews the stream 60s before expiry, and retries immediately when the tab becomes visible or the network comes back.
+- `GET /api/news` merges the RSS feeds in `src/lib/news.ts` (or `NEWS_FEEDS`), round-robin so no outlet dominates, cached 10 min. `?debug=1` shows which feeds responded.
+
+To add or remove a feed, set `NEWS_FEEDS` in Vercel (format in `.env.example`) and redeploy. To add or remove a camera, re-run `/api/google/connect` and toggle it on Google's screen.
 
 ## Google setup
 

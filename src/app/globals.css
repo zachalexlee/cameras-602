@@ -112,3 +112,23 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .status-dot { animation: none; }
 }
+
+/* News ticker: constant-speed marquee, right to left. Duration is set inline from measured width. */
+.ticker-track {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: ticker-scroll linear infinite;
+}
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.ticker-viewport:hover .ticker-track,
+.ticker-viewport:focus-within .ticker-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track { animation: none; }
+  .ticker-viewport { overflow-x: auto; }
+}

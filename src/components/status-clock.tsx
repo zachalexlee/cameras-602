@@ -29,7 +29,7 @@ export function StatusClock() {
     <div className="flex items-baseline gap-3 font-mono tabular-nums">
       <span className="label hidden text-muted sm:inline">{date}</span>
       <span className="glow text-base font-medium text-foreground sm:text-lg">{local}</span>
-      <span className="label text-muted">{utc}</span>
+      <span className="label hidden text-muted sm:inline">{utc}</span>
     </div>
   );
 }
