@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { NewsItem } from "@/lib/news";
 
 const REFRESH_MS = 10 * 60 * 1000;
-const SPEED_PX_PER_S = 70;
+const SPEED_PX_PER_S = 45;
 const MIN_DURATION_S = 30;
 
 export function NewsTicker() {

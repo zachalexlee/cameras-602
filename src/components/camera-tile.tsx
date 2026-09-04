@@ -9,6 +9,10 @@ const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 const EXTEND_LEAD_MS = 60_000; // renew this long before SDM's expiresAt
 const BACKOFF_BASE_MS = 3_000;
 const BACKOFF_MAX_MS = 60_000;
+const BACKOFF_MAX_LONG_MS = 5 * 60_000; // after repeated failures (e.g. dead battery)
+const LONG_BACKOFF_AFTER = 6;
+const RATE_LIMIT_MIN_DELAY_MS = 20_000; // SDM sandbox: ~10 calls/min per command
+const STAGGER_MS = 350; // spread initial negotiations so 10 cameras don't hit the quota at once
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const DISCONNECT_GRACE_MS = 5_000;
 
@@ -44,14 +48,18 @@ async function postStream<T>(cameraId: string, body: Record<string, string>, kee
   return data;
 }
 
+/** natural: frame follows the stream's own shape. wide: every tile is 16:9 and the video fills it (portrait feeds get cropped). */
+export type TileShape = "natural" | "wide";
+
 type Props = {
   camera: Camera;
   index: number;
+  shape: TileShape;
   expanded: boolean;
   onToggleExpand: () => void;
 };
 
-export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
+export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const backoffRef = useRef(0);
@@ -59,6 +67,7 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [muted, setMuted] = useState(true);
   const [attempt, setAttempt] = useState(0);
+  const [aspect, setAspect] = useState<number | null>(null);
 
   const retryNow = useCallback(() => {
     backoffRef.current = 0;
@@ -91,10 +100,13 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
       if (videoRef.current) videoRef.current.srcObject = null;
     };
 
-    const scheduleRetry = (why: string, asleep = false) => {
+    const scheduleRetry = (why: string, asleep = false, rateLimited = false) => {
       if (cancelled) return;
       const n = backoffRef.current++;
-      const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** n) * (0.8 + Math.random() * 0.4);
+      const cap = n >= LONG_BACKOFF_AFTER ? BACKOFF_MAX_LONG_MS : BACKOFF_MAX_MS;
+      let delay = Math.min(cap, BACKOFF_BASE_MS * 2 ** n);
+      if (rateLimited) delay = Math.max(delay, RATE_LIMIT_MIN_DELAY_MS);
+      delay *= 0.8 + Math.random() * 0.4;
       setStatus(asleep ? "waking" : "error");
       setMessage(why);
       retryTimer = window.setTimeout(() => setAttempt((a) => a + 1), delay);
@@ -119,6 +131,12 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
     const start = async () => {
       setStatus("connecting");
       setMessage(null);
+
+      // First attempt only: stagger by tile index so a big grid doesn't burst the SDM quota.
+      if (attempt === 0 && index > 0) {
+        await new Promise((r) => window.setTimeout(r, index * STAGGER_MS));
+        if (cancelled) return;
+      }
 
       const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       pc = conn;
@@ -178,7 +196,8 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
       if (cancelled) return;
       teardown();
       const asleep = e.code === "FAILED_PRECONDITION" || /offline|asleep/i.test(e.message);
-      scheduleRetry(e.message || "Could not start stream", asleep);
+      const rateLimited = e.code === "RESOURCE_EXHAUSTED";
+      scheduleRetry(asleep ? "Asleep, dead battery, or unplugged" : e.message || "Could not start stream", asleep, rateLimited);
     });
 
     return () => {
@@ -186,7 +205,7 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
       window.clearTimeout(retryTimer);
       teardown();
     };
-  }, [camera.id, camera.webrtc, attempt]);
+  }, [camera.id, camera.webrtc, attempt, index]);
 
   // Coming back to the tab or regaining network: reconnect immediately if we are down.
   useEffect(() => {
@@ -232,7 +251,7 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
       aria-label={label}
     >
       <span className="corner-b" aria-hidden="true" />
-      <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
+      <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-1.5">
         <h2 className="label truncate text-accent">{label}</h2>
         <div className="flex items-center gap-2">
           {status === "live" ? <span className="status-dot" aria-hidden="true" /> : null}
@@ -240,13 +259,22 @@ export function CameraTile({ camera, index, expanded, onToggleExpand }: Props) {
         </div>
       </header>
 
-      <div ref={frameRef} className="group relative aspect-video cursor-pointer bg-black" onClick={onToggleExpand}>
+      <div
+        ref={frameRef}
+        className="group relative flex-1 cursor-pointer overflow-hidden bg-black"
+        style={{ aspectRatio: shape === "wide" ? 16 / 9 : (aspect ?? 16 / 9), minHeight: expanded ? "60vh" : undefined }}
+        onClick={onToggleExpand}
+      >
         <video
           ref={videoRef}
           autoPlay
           muted
           playsInline
-          className={`h-full w-full object-contain transition-opacity ${status === "live" ? "opacity-100" : "opacity-0"}`}
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            if (v.videoWidth && v.videoHeight) setAspect(v.videoWidth / v.videoHeight);
+          }}
+          className={`absolute inset-0 h-full w-full transition-opacity ${shape === "wide" ? "object-cover" : "object-contain"} ${status === "live" ? "opacity-100" : "opacity-0"}`}
         />
 
         {status !== "live" ? (

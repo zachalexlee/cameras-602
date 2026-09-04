@@ -118,6 +118,14 @@ type SdmDevice = {
   parentRelations?: Array<{ parent?: string; displayName?: string }>;
 };
 
+const TYPE_ORDER: Record<Camera["type"], number> = { DOORBELL: 0, CAMERA: 1, DISPLAY: 2, OTHER: 3 };
+
+/** Google sometimes yields "Front Door Doorbell Doorbell"; collapse repeated consecutive words. */
+function tidyName(name: string): string {
+  const words = name.split(/\s+/).filter(Boolean);
+  return words.filter((w, i) => i === 0 || w.toLowerCase() !== words[i - 1].toLowerCase()).join(" ");
+}
+
 let cachedCameras: { value: Camera[]; expiresAt: number } | null = null;
 const CAMERA_LIST_TTL_MS = 5 * 60 * 1000;
 
@@ -135,10 +143,11 @@ export async function listCameras(force = false): Promise<Camera[]> {
         rawType === "CAMERA" || rawType === "DOORBELL" || rawType === "DISPLAY" ? rawType : "OTHER";
       const room = d.parentRelations?.find((p) => p.displayName)?.displayName ?? null;
       const custom = d.traits?.[INFO_TRAIT]?.customName?.trim();
-      const name = custom || room || `${type.charAt(0)}${type.slice(1).toLowerCase()}`;
+      const name = tidyName(custom || room || `${type.charAt(0)}${type.slice(1).toLowerCase()}`);
       return { id, name, room, type, protocols, webrtc: protocols.includes("WEB_RTC") };
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    // Doorbells (portrait streams) first so grid rows stay visually consistent, then by name.
+    .sort((a, b) => TYPE_ORDER[a.type] - TYPE_ORDER[b.type] || a.name.localeCompare(b.name));
 
   cachedCameras = { value: cameras, expiresAt: Date.now() + CAMERA_LIST_TTL_MS };
   return cameras;

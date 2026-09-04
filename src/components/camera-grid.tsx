@@ -2,17 +2,24 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Camera } from "@/lib/google";
-import { CameraTile } from "@/components/camera-tile";
+import { CameraTile, type TileShape } from "@/components/camera-tile";
 import { Panel } from "@/components/panel";
+import { useLocalStorageState } from "@/lib/use-local-storage";
 
 const REFRESH_LIST_MS = 10 * 60 * 1000;
+const MIN_COLS = 1;
+const MAX_COLS = 6;
 
 type LoadError = { message: string; code: string };
+type GridPrefs = { cols: number | "auto"; shape: TileShape };
+const DEFAULT_PREFS: GridPrefs = { cols: "auto", shape: "natural" };
 
 export function CameraGrid() {
   const [cameras, setCameras] = useState<Camera[] | null>(null);
   const [error, setError] = useState<LoadError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [storedPrefs, setPrefs] = useLocalStorageState<GridPrefs>("homeops:grid:v1", DEFAULT_PREFS);
+  const prefs = storedPrefs ?? DEFAULT_PREFS;
 
   const load = useCallback(async (force = false) => {
     try {
@@ -39,16 +46,56 @@ export function CameraGrid() {
   }, [load]);
 
   const count = cameras?.length ?? 0;
+  const setCols = (cols: number | "auto") => setPrefs((p) => ({ ...p, cols }));
+  const setShape = (shape: TileShape) => setPrefs((p) => ({ ...p, shape }));
+  const step = (delta: number) => {
+    const current = prefs.cols === "auto" ? 3 : prefs.cols;
+    setCols(Math.min(MAX_COLS, Math.max(MIN_COLS, current + delta)));
+  };
+
+  const gridStyle =
+    prefs.cols === "auto"
+      ? undefined
+      : ({ "--cols": prefs.cols, "--cols-mobile": Math.min(prefs.cols, 2) } as React.CSSProperties);
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
         <h1 className="label text-muted">
           Live feeds · <span className="text-foreground">{cameras ? count : "--"}</span> {count === 1 ? "camera" : "cameras"}
         </h1>
-        <button type="button" onClick={() => void load(true)} className="label text-muted transition hover:text-foreground">
-          Refresh list
-        </button>
+
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex items-center gap-1" role="group" aria-label="Tile size">
+            <span className="label mr-1 text-muted">Tiles</span>
+            <button type="button" onClick={() => setCols("auto")} aria-pressed={prefs.cols === "auto"} className={ctl(prefs.cols === "auto")}>
+              Auto
+            </button>
+            <button type="button" onClick={() => step(-1)} aria-label="Larger tiles (fewer columns)" className={ctl(false)}>
+              −
+            </button>
+            <span className="label w-6 text-center tabular-nums text-foreground" aria-live="polite">
+              {prefs.cols === "auto" ? "A" : prefs.cols}
+            </span>
+            <button type="button" onClick={() => step(1)} aria-label="Smaller tiles (more columns)" className={ctl(false)}>
+              +
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1" role="group" aria-label="Tile shape">
+            <span className="label mr-1 text-muted">Shape</span>
+            <button type="button" onClick={() => setShape("natural")} aria-pressed={prefs.shape === "natural"} className={ctl(prefs.shape === "natural")}>
+              Natural
+            </button>
+            <button type="button" onClick={() => setShape("wide")} aria-pressed={prefs.shape === "wide"} className={ctl(prefs.shape === "wide")}>
+              Wide
+            </button>
+          </div>
+
+          <button type="button" onClick={() => void load(true)} className="label text-muted transition hover:text-foreground">
+            Refresh list
+          </button>
+        </div>
       </div>
 
       {error && !cameras ? (
@@ -78,12 +125,13 @@ export function CameraGrid() {
           <p className="label text-[10px] text-muted/80">Run /api/google/connect again and switch on each camera you want here.</p>
         </Panel>
       ) : (
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <section className={`camera-grid grid gap-3 ${prefs.cols === "auto" ? "camera-grid-auto" : "camera-grid-fixed"}`} style={gridStyle}>
           {cameras.map((cam, i) => (
             <CameraTile
               key={cam.id}
               camera={cam}
               index={i}
+              shape={prefs.shape}
               expanded={expanded === cam.id}
               onToggleExpand={() => setExpanded((cur) => (cur === cam.id ? null : cam.id))}
             />
@@ -96,4 +144,8 @@ export function CameraGrid() {
       ) : null}
     </>
   );
+}
+
+function ctl(active: boolean) {
+  return `label border px-2 py-1 transition ${active ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:border-line-strong hover:text-foreground"}`;
 }

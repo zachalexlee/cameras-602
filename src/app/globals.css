@@ -132,3 +132,17 @@ body {
   .ticker-track { animation: none; }
   .ticker-viewport { overflow-x: auto; }
 }
+
+/* Camera grid density. Auto packs as many ~340px tiles as fit; fixed uses the chosen column count (max 2 on phones). */
+.camera-grid-auto {
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+@media (max-width: 639px) {
+  .camera-grid-auto { grid-template-columns: minmax(0, 1fr); }
+}
+.camera-grid-fixed {
+  grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+}
+@media (max-width: 639px) {
+  .camera-grid-fixed { grid-template-columns: repeat(var(--cols-mobile, 1), minmax(0, 1fr)); }
+}

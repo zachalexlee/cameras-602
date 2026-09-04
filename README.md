@@ -45,6 +45,7 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 - `GET /api/cameras` lists camera-capable Nest devices (server-side SDM call, cached 5 min). `?refresh=1` bypasses the cache.
 - `POST /api/cameras/[id]/stream` relays WebRTC negotiation: `{ offerSdp }` → answer, `{ extend: mediaSessionId }` before the ~5-minute expiry, `{ stop: mediaSessionId }` on teardown. Video flows browser ↔ Google directly; the server never sees it. The browser never receives a Google access token.
 - Each `CameraTile` reconnects with exponential backoff (3s → 60s), renews the stream 60s before expiry, and retries immediately when the tab becomes visible or the network comes back.
+- Grid controls (top-right of the camera section): Tiles Auto / 1–6 columns and Shape Natural / Wide, remembered per device. Wide forces 16:9 tiles and crops portrait doorbell feeds; Natural follows each stream's own shape.
 - `GET /api/news` merges the RSS feeds in `src/lib/news.ts` (or `NEWS_FEEDS`), round-robin so no outlet dominates, cached 10 min. `?debug=1` shows which feeds responded.
 
 - Weather is fetched in the browser from api.weather.gov for Tacoma (47.2529, -122.4443), refreshed every 15 minutes; the last good reading stays on screen if NWS is down.
