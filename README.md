@@ -2,7 +2,7 @@
 
 A personal, password-protected web dashboard for Google Nest cameras, plus clock, weather, news ticker, notes and a Tacoma PD scanner. Next.js App Router, TypeScript, Tailwind. Hosted on Vercel.
 
-Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **Phase 3 complete** — cameras, news ticker, weather, notes, and radio. Phase 4 (hardening/polish) is next.
+Build plan: `docs/build-plan.md`. Google setup: `docs/google-setup.md`. Current status: **v1.0 — all four build-plan phases complete.** Cameras, news ticker, weather, notes, radio, and the hardening pass.
 
 ## Local dev
 
@@ -33,12 +33,27 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 | `BROADCASTIFY_STREAM_URL` | optional | premium direct stream; otherwise the embed player is used |
 | `NEWS_FEEDS` | optional | comma-separated RSS URLs overriding the defaults |
 
+## Using the dashboard
+
+- **Tiles** (top right of the camera section): `−` / `+` set 1–6 columns, `Auto` packs as many ~340px tiles as fit. **Shape**: `Natural` follows each camera's real aspect ratio (doorbells are tall); `Wide` forces 16:9 and crops. Both are remembered per device.
+- Click a tile to enlarge it; hover for Unmute / Expand / Fullscreen.
+- **Add to Home Screen** on an iPad or Android tablet for a full-screen kiosk. The page requests a screen wake lock so the display stays on while it is visible.
+- **Camera list** refreshes every 10 min and when the network returns. Names come from the Google Home app; rename there, then "Refresh list".
+
+## Reliability (Phase 4)
+
+- Every module is wrapped in a crash guard (`TileBoundary`): a failing tile shows a fault panel and retries after 60s; the rest of the page keeps running. Route-level `error.tsx` / `global-error.tsx` do the same for the whole page.
+- Camera tiles: exponential backoff (3s→60s, then 5 min after six straight failures), auto-extend before the SDM expiry, a frozen-frame watchdog (~30s without the video clock advancing forces a rebuild), staggered start-up, and reconnect on tab focus / network return.
+- Sessions slide: any request older than 7 days into the 30-day cookie re-issues it, so a screen used at least weekly never lapses. If a session does lapse, the first 401 clears the cookie and sends the page to `/login`.
+- Security headers: `X-Frame-Options: DENY`, `nosniff`, strict referrer policy, `Permissions-Policy` denying camera/mic/geolocation (WebRTC here is receive-only), `X-Robots-Tag: noindex`.
+- Nothing secret reaches the browser: the client bundle is checked for `GOOGLE_*`, `AUTH_SECRET`, `DASHBOARD_PASSWORD` and the SDM/token URLs. The browser only ever sees camera names/ids, SDP answers, headlines, and (by design) `BROADCASTIFY_STREAM_URL` if you set it.
+
 ## How auth works
 
 - `src/proxy.ts` runs on every request except static assets. Only `/login` and `POST /api/auth/login` are public. Pages without a valid session redirect to `/login?next=…`; API routes get a 401.
 - `POST /api/auth/login` compares the password in constant time, then sets an `HttpOnly; Secure; SameSite=Lax` cookie containing an HMAC-SHA256 signed token that expires after 30 days.
 - Login attempts are rate limited per IP: 5 failures per 15 minutes (in-memory, per serverless instance).
-- Rotate `AUTH_SECRET` to sign everyone out.
+- Rotate `AUTH_SECRET` to sign everyone out. Sessions renew themselves on use (see Reliability).
 
 ## Cameras and news
 

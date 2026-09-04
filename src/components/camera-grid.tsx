@@ -5,6 +5,7 @@ import type { Camera } from "@/lib/google";
 import { CameraTile, type TileShape } from "@/components/camera-tile";
 import { Panel } from "@/components/panel";
 import { useLocalStorageState } from "@/lib/use-local-storage";
+import { apiFetch } from "@/lib/client-fetch";
 
 const REFRESH_LIST_MS = 10 * 60 * 1000;
 const MIN_COLS = 1;
@@ -14,8 +15,8 @@ type LoadError = { message: string; code: string };
 type GridPrefs = { cols: number | "auto"; shape: TileShape };
 const DEFAULT_PREFS: GridPrefs = { cols: "auto", shape: "natural" };
 
-export function CameraGrid() {
-  const [cameras, setCameras] = useState<Camera[] | null>(null);
+export function CameraGrid({ initialCameras = null }: { initialCameras?: Camera[] | null }) {
+  const [cameras, setCameras] = useState<Camera[] | null>(initialCameras);
   const [error, setError] = useState<LoadError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [storedPrefs, setPrefs] = useLocalStorageState<GridPrefs>("homeops:grid:v1", DEFAULT_PREFS);
@@ -23,7 +24,7 @@ export function CameraGrid() {
 
   const load = useCallback(async (force = false) => {
     try {
-      const res = await fetch(`/api/cameras${force ? "?refresh=1" : ""}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/cameras${force ? "?refresh=1" : ""}`, { cache: "no-store" });
       const data = (await res.json().catch(() => ({}))) as { cameras?: Camera[]; error?: string; code?: string };
       if (!res.ok) {
         setError({ message: data.error ?? `Request failed (${res.status})`, code: data.code ?? "ERROR" });
@@ -37,13 +38,17 @@ export function CameraGrid() {
   }, []);
 
   useEffect(() => {
-    const first = window.setTimeout(() => void load(), 0);
+    // Server already rendered the list? Skip the immediate refetch and just keep it fresh.
+    const first = initialCameras ? undefined : window.setTimeout(() => void load(), 0);
     const id = window.setInterval(() => void load(), REFRESH_LIST_MS);
+    const onOnline = () => void load();
+    window.addEventListener("online", onOnline);
     return () => {
       window.clearTimeout(first);
       window.clearInterval(id);
+      window.removeEventListener("online", onOnline);
     };
-  }, [load]);
+  }, [load, initialCameras]);
 
   const count = cameras?.length ?? 0;
   const setCols = (cols: number | "auto") => setPrefs((p) => ({ ...p, cols }));
@@ -102,7 +107,7 @@ export function CameraGrid() {
         <Panel title="Uplink" meta={<span className="text-danger">{error.code === "NOT_CONFIGURED" ? "Not linked" : "Error"}</span>} bodyClassName="gap-3 px-4 py-6">
           <p className="label text-foreground">{error.message}</p>
           {error.code === "NOT_CONFIGURED" ? (
-            <p className="label text-[10px] text-muted/80">
+            <p className="label text-[10px] text-muted">
               Finish the Google setup in docs/google-setup.md, then run /api/google/connect and redeploy.
             </p>
           ) : (
@@ -112,7 +117,7 @@ export function CameraGrid() {
           )}
         </Panel>
       ) : cameras === null ? (
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true">
+        <section className={`camera-grid grid gap-3 ${prefs.cols === "auto" ? "camera-grid-auto" : "camera-grid-fixed"}`} style={gridStyle} aria-busy="true">
           {[0, 1, 2].map((i) => (
             <Panel key={i} title={`Cam ${String(i + 1).padStart(2, "0")}`} meta="Loading" bodyClassName="aspect-video items-center justify-center">
               <span className="label text-muted">Fetching camera list</span>
@@ -122,7 +127,7 @@ export function CameraGrid() {
       ) : cameras.length === 0 ? (
         <Panel title="Uplink" meta={<span className="text-warn">No cameras</span>} bodyClassName="gap-3 px-4 py-6">
           <p className="label text-foreground">Google returned no cameras for this account.</p>
-          <p className="label text-[10px] text-muted/80">Run /api/google/connect again and switch on each camera you want here.</p>
+          <p className="label text-[10px] text-muted">Run /api/google/connect again and switch on each camera you want here.</p>
         </Panel>
       ) : (
         <section className={`camera-grid grid gap-3 ${prefs.cols === "auto" ? "camera-grid-auto" : "camera-grid-fixed"}`} style={gridStyle}>

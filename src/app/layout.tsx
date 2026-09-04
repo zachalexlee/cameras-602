@@ -17,6 +17,12 @@ export const metadata: Metadata = {
   title: "Home Ops",
   description: "Live Nest cameras, weather, news and more on one screen.",
   robots: { index: false, follow: false },
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }, { url: "/icons/icon-192.png", sizes: "192x192" }],
+    apple: "/icons/apple-touch-icon.png",
+  },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Home Ops" },
 };
 
 export const viewport: Viewport = {

@@ -49,7 +49,7 @@ export function NotesTile() {
       </form>
 
       <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-        {state?.todos.length === 0 ? <li className="label py-1 text-[10px] text-muted/70">Nothing on the list</li> : null}
+        {state?.todos.length === 0 ? <li className="label py-1 text-[10px] text-muted">Nothing on the list</li> : null}
         {state?.todos.map((t) => (
           <li key={t.id} className="group flex items-center gap-2">
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm">
@@ -80,7 +80,7 @@ export function NotesTile() {
         rows={4}
         className="w-full resize-y border border-line bg-background px-2.5 py-2 font-mono text-sm leading-relaxed outline-none transition focus:border-accent"
       />
-      <p className="label text-[10px] text-muted/60">Saved on this device only</p>
+      <p className="label text-[10px] text-muted">Saved on this device only</p>
     </Panel>
   );
 }

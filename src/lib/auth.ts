@@ -71,28 +71,41 @@ export async function createSessionToken(now: number = Date.now()): Promise<stri
   return `${payload}.${toBase64Url(signature)}`;
 }
 
-/** Returns true only for a well-formed, unexpired token with a valid signature. Fails closed. */
-export async function verifySessionToken(
+/**
+ * Verifies a token and returns its expiry (unix ms), or null for anything
+ * malformed, expired, or wrongly signed. Fails closed.
+ */
+export async function readSessionToken(
   token: string | undefined | null,
   now: number = Date.now(),
-): Promise<boolean> {
-  if (!token) return false;
+): Promise<{ expiresAt: number } | null> {
+  if (!token) return null;
   const secret = getAuthSecret();
-  if (!secret) return false;
+  if (!secret) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return null;
   const [version, expText, signatureText] = parts;
-  if (version !== TOKEN_VERSION) return false;
-  if (!/^\d{1,12}$/.test(expText)) return false;
-  if (Number(expText) * 1000 <= now) return false;
+  if (version !== TOKEN_VERSION) return null;
+  if (!/^\d{1,12}$/.test(expText)) return null;
+  const expiresAt = Number(expText) * 1000;
+  if (expiresAt <= now) return null;
 
   const signature = fromBase64Url(signatureText);
-  if (!signature || signature.length !== 32) return false;
+  if (!signature || signature.length !== 32) return null;
 
   const key = await importHmacKey(secret);
-  return crypto.subtle.verify("HMAC", key, signature, encoder.encode(`${version}.${expText}`));
+  const ok = await crypto.subtle.verify("HMAC", key, signature, encoder.encode(`${version}.${expText}`));
+  return ok ? { expiresAt } : null;
 }
+
+/** Returns true only for a well-formed, unexpired token with a valid signature. */
+export async function verifySessionToken(token: string | undefined | null, now: number = Date.now()): Promise<boolean> {
+  return (await readSessionToken(token, now)) !== null;
+}
+
+/** Sliding sessions: re-issue the cookie once it is older than this, so an always-on screen never lapses. */
+export const SESSION_RENEW_AFTER_SECONDS = 7 * 24 * 60 * 60;
 
 /**
  * Constant-time password check against DASHBOARD_PASSWORD.

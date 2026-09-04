@@ -142,7 +142,7 @@ export function WeatherTile() {
       meta={
         error && !data ? <span className="text-danger">Offline</span> : error ? <span className="text-warn">Stale</span> : <span>{data?.place ?? "NWS"}</span>
       }
-      bodyClassName="px-4 py-3"
+      bodyClassName="min-h-[236px] px-4 py-3"
     >
       {!data ? (
         <p className="label text-muted">{error ? `NWS unreachable · ${error}` : "Contacting National Weather Service"}</p>

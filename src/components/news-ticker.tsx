@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { NewsItem } from "@/lib/news";
+import { apiFetch } from "@/lib/client-fetch";
 
 const REFRESH_MS = 10 * 60 * 1000;
 const SPEED_PX_PER_S = 45;
@@ -17,7 +18,7 @@ export function NewsTicker() {
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch("/api/news", { cache: "no-store" });
+        const res = await apiFetch("/api/news", { cache: "no-store" });
         const data = (await res.json().catch(() => ({}))) as { items?: NewsItem[] };
         if (cancelled) return;
         if (res.ok && data.items && data.items.length) {
@@ -36,9 +37,20 @@ export function NewsTicker() {
     };
     void load();
     const id = window.setInterval(() => void load(), REFRESH_MS);
+    let lastLoad = Date.now();
+    const onWake = () => {
+      // Refresh on tab focus / network return, but not more than once a minute.
+      if (document.visibilityState !== "visible" || Date.now() - lastLoad < 60_000) return;
+      lastLoad = Date.now();
+      void load();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
     };
   }, []);
 

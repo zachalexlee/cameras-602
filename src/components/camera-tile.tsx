@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Camera } from "@/lib/google";
+import { apiFetch } from "@/lib/client-fetch";
+import { useLocalStorageState } from "@/lib/use-local-storage";
 
 type Status = "connecting" | "live" | "waking" | "error" | "unsupported";
 
@@ -15,6 +17,8 @@ const RATE_LIMIT_MIN_DELAY_MS = 20_000; // SDM sandbox: ~10 calls/min per comman
 const STAGGER_MS = 350; // spread initial negotiations so 10 cameras don't hit the quota at once
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const DISCONNECT_GRACE_MS = 5_000;
+const STALL_CHECK_MS = 10_000; // frozen-frame watchdog cadence
+const STALL_AFTER_CHECKS = 3; // ~30s without the clock advancing => rebuild the session
 
 type StreamError = Error & { code?: string };
 
@@ -33,7 +37,7 @@ function waitForIceGathering(pc: RTCPeerConnection, timeoutMs: number): Promise<
 }
 
 async function postStream<T>(cameraId: string, body: Record<string, string>, keepalive = false): Promise<T> {
-  const res = await fetch(`/api/cameras/${encodeURIComponent(cameraId)}/stream`, {
+  const res = await apiFetch(`/api/cameras/${encodeURIComponent(cameraId)}/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -68,6 +72,8 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
   const [muted, setMuted] = useState(true);
   const [attempt, setAttempt] = useState(0);
   const [aspect, setAspect] = useState<number | null>(null);
+  // Last known shape for this camera on this device, so tiles don't jump on later loads.
+  const [savedAspect, setSavedAspect] = useLocalStorageState<number | null>(`homeops:aspect:${camera.id}`, null);
 
   const retryNow = useCallback(() => {
     backoffRef.current = 0;
@@ -83,10 +89,12 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
     let extendTimer: number | undefined;
     let retryTimer: number | undefined;
     let graceTimer: number | undefined;
+    let stallTimer: number | undefined;
 
     const teardown = () => {
       window.clearTimeout(extendTimer);
       window.clearTimeout(graceTimer);
+      window.clearInterval(stallTimer);
       if (pc) {
         pc.ontrack = null;
         pc.onconnectionstatechange = null;
@@ -161,6 +169,22 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
           backoffRef.current = 0;
           setStatus("live");
           setMessage(null);
+          // Watchdog: a "connected" peer whose video clock stops advancing is a dead stream.
+          let lastTime = -1;
+          let stalls = 0;
+          window.clearInterval(stallTimer);
+          stallTimer = window.setInterval(() => {
+            const v = videoRef.current;
+            if (cancelled || !v || pc !== conn) return;
+            if (document.visibilityState !== "visible") return; // browsers throttle hidden tabs
+            if (v.currentTime === lastTime) stalls++;
+            else stalls = 0;
+            lastTime = v.currentTime;
+            if (stalls >= STALL_AFTER_CHECKS) {
+              teardown();
+              scheduleRetry("Video froze, reconnecting");
+            }
+          }, STALL_CHECK_MS);
         } else if (s === "failed" || s === "closed") {
           teardown();
           scheduleRetry("Connection lost");
@@ -262,7 +286,11 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
       <div
         ref={frameRef}
         className="group relative flex-1 cursor-pointer overflow-hidden bg-black"
-        style={{ aspectRatio: shape === "wide" ? 16 / 9 : (aspect ?? 16 / 9), minHeight: expanded ? "60vh" : undefined }}
+        style={
+          expanded
+            ? { height: "clamp(320px, calc(100vh - 220px), 1400px)" }
+            : { aspectRatio: shape === "wide" ? 16 / 9 : (aspect ?? savedAspect ?? 16 / 9) }
+        }
         onClick={onToggleExpand}
       >
         <video
@@ -272,7 +300,11 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
           playsInline
           onLoadedMetadata={(e) => {
             const v = e.currentTarget;
-            if (v.videoWidth && v.videoHeight) setAspect(v.videoWidth / v.videoHeight);
+            if (v.videoWidth && v.videoHeight) {
+              const ratio = v.videoWidth / v.videoHeight;
+              setAspect(ratio);
+              if (Math.abs((savedAspect ?? 0) - ratio) > 0.01) setSavedAspect(ratio);
+            }
           }}
           className={`absolute inset-0 h-full w-full transition-opacity ${shape === "wide" ? "object-cover" : "object-contain"} ${status === "live" ? "opacity-100" : "opacity-0"}`}
         />
@@ -282,20 +314,20 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
             {status === "connecting" ? (
               <>
                 <span className="label text-accent">Negotiating stream</span>
-                <span className="label text-[10px] text-muted/70">Battery cameras can take a few seconds</span>
+                <span className="label text-[10px] text-muted">Battery cameras can take a few seconds</span>
               </>
             ) : status === "unsupported" ? (
               <>
                 <span className="label text-muted">RTSP-only camera</span>
-                <span className="label text-[10px] text-muted/70">WebRTC not offered by this device · not supported in v1</span>
+                <span className="label text-[10px] text-muted">WebRTC not offered by this device · not supported in v1</span>
               </>
             ) : (
               <>
                 <span className={`label ${status === "waking" ? "text-warn" : "text-danger"}`}>
                   {status === "waking" ? "Camera asleep or offline" : "No signal"}
                 </span>
-                {message ? <span className="label text-[10px] text-muted/70">{message}</span> : null}
-                <span className="label text-[10px] text-muted/70">Retrying automatically</span>
+                {message ? <span className="label text-[10px] text-muted">{message}</span> : null}
+                <span className="label text-[10px] text-muted">Retrying automatically</span>
                 <button
                   type="button"
                   onClick={(e) => {

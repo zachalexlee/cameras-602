@@ -49,7 +49,7 @@ export function RadioTile({ config }: { config: RadioConfig }) {
         />
       )}
 
-      <p className="label text-[10px] text-muted/60">
+      <p className="label text-[10px] text-muted">
         {config.directStreamUrl ? "Premium direct stream" : "Press play in the player · audio via Broadcastify"}
         {" · "}
         <a href={config.directoryUrl} target="_blank" rel="noreferrer noopener" className="underline decoration-line underline-offset-2 hover:text-foreground">
