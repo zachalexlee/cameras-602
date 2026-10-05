@@ -15,6 +15,7 @@ export class SdmError extends Error {
     message: string,
     public readonly status: number,
     public readonly googleStatus?: string,
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "SdmError";
@@ -104,7 +105,8 @@ async function sdmFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const body = (await res.json().catch(() => ({}))) as T & GoogleErrorBody;
   if (!res.ok) {
     const message = body.error?.message || `SDM request failed (${res.status})`;
-    throw new SdmError(message, res.status, body.error?.status);
+    const ra = Number(res.headers.get("retry-after"));
+    throw new SdmError(message, res.status, body.error?.status, Number.isFinite(ra) && ra > 0 ? ra : undefined);
   }
   return body;
 }
@@ -193,11 +195,18 @@ export async function stopWebRtcStream(deviceId: string, mediaSessionId: string)
 }
 
 /** Turn an SDM failure into a JSON body + HTTP status suitable for the browser. */
-export function toClientError(err: unknown): { status: number; body: { error: string; code: string } } {
+export function toClientError(err: unknown): { status: number; body: { error: string; code: string }; headers?: Record<string, string> } {
   if (err instanceof SdmError) {
     const code = err.googleStatus ?? (err.status === 429 ? "RESOURCE_EXHAUSTED" : "SDM_ERROR");
     let message = err.message;
-    if (code === "RESOURCE_EXHAUSTED") message = "Google rate limit hit. Retrying shortly.";
+    if (code === "RESOURCE_EXHAUSTED") {
+      const status = err.status >= 400 && err.status < 600 ? err.status : 429;
+      return {
+        status,
+        body: { error: "Google's camera quota is busy. Waiting for a slot.", code },
+        headers: { "Retry-After": String(err.retryAfterSeconds ?? 30) },
+      };
+    }
     else if (code === "FAILED_PRECONDITION" || /offline/i.test(message)) message = "Camera is offline or asleep.";
     else if (code === "UNAUTHENTICATED" || code === "PERMISSION_DENIED" || code === "INVALID_GRANT") {
       message = "Google rejected the stored credentials. Re-run /api/google/connect.";

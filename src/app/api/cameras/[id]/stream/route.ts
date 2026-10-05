@@ -43,7 +43,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/cameras/[id
       { status: 400 },
     );
   } catch (err) {
-    const { status, body: errBody } = toClientError(err);
-    return NextResponse.json(errBody, { status });
+    const { status, body: errBody, headers } = toClientError(err);
+    return NextResponse.json(errBody, { status, headers });
   }
 }

@@ -43,6 +43,7 @@ Generate `AUTH_SECRET` with `openssl rand -base64 32`.
 ## Reliability (Phase 4)
 
 - Every module is wrapped in a crash guard (`TileBoundary`): a failing tile shows a fault panel and retries after 60s; the rest of the page keeps running. Route-level `error.tsx` / `global-error.tsx` do the same for the whole page.
+- Google quota: every camera command in a tab (start, renew, stop) goes through one shared queue (`src/lib/stream-budget.ts`): max 8 per sliding minute, 1.5s apart, renewals before starts. A single 429 from Google pauses the whole queue for its `Retry-After` (default 30s); the Live feeds header shows the countdown. Tiles release their streams after 60s in a background tab or 45s scrolled off screen and resume automatically. Each open copy of the dashboard spends the same per-project quota, so keep one screen per household when possible.
 - Camera tiles: exponential backoff (3s→60s, then 5 min after six straight failures), auto-extend before the SDM expiry, a frozen-frame watchdog (~30s without the video clock advancing forces a rebuild), staggered start-up, and reconnect on tab focus / network return.
 - Sessions slide: any request older than 7 days into the 30-day cookie re-issues it, so a screen used at least weekly never lapses. If a session does lapse, the first 401 clears the cookie and sends the page to `/login`.
 - Security headers: `X-Frame-Options: DENY`, `nosniff`, strict referrer policy, `Permissions-Policy` denying camera/mic/geolocation (WebRTC here is receive-only), `X-Robots-Tag: noindex`.

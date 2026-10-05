@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Camera } from "@/lib/google";
 import { apiFetch } from "@/lib/client-fetch";
+import { pauseFor, schedule } from "@/lib/stream-budget";
+import { useInView, usePageActive } from "@/lib/use-activity";
 import { useLocalStorageState } from "@/lib/use-local-storage";
 
-type Status = "connecting" | "live" | "waking" | "error" | "unsupported";
+type Status = "connecting" | "live" | "waking" | "throttled" | "error" | "unsupported" | "paused";
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 const EXTEND_LEAD_MS = 60_000; // renew this long before SDM's expiresAt
@@ -13,14 +15,15 @@ const BACKOFF_BASE_MS = 3_000;
 const BACKOFF_MAX_MS = 60_000;
 const BACKOFF_MAX_LONG_MS = 5 * 60_000; // after repeated failures (e.g. dead battery)
 const LONG_BACKOFF_AFTER = 6;
-const RATE_LIMIT_MIN_DELAY_MS = 20_000; // SDM sandbox: ~10 calls/min per command
-const STAGGER_MS = 350; // spread initial negotiations so 10 cameras don't hit the quota at once
+const RATE_LIMIT_PAUSE_MS = 30_000; // default hold when Google says 429 and gives no Retry-After
+const HIDDEN_GRACE_MS = 60_000; // tab hidden this long => release the streams (saves Google quota)
+const OFFSCREEN_GRACE_MS = 45_000; // tile scrolled away this long => release its stream
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const DISCONNECT_GRACE_MS = 5_000;
 const STALL_CHECK_MS = 10_000; // frozen-frame watchdog cadence
 const STALL_AFTER_CHECKS = 3; // ~30s without the clock advancing => rebuild the session
 
-type StreamError = Error & { code?: string };
+type StreamError = Error & { code?: string; retryAfterMs?: number };
 
 function waitForIceGathering(pc: RTCPeerConnection, timeoutMs: number): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
@@ -36,7 +39,7 @@ function waitForIceGathering(pc: RTCPeerConnection, timeoutMs: number): Promise<
   });
 }
 
-async function postStream<T>(cameraId: string, body: Record<string, string>, keepalive = false): Promise<T> {
+async function postStreamNow<T>(cameraId: string, body: Record<string, string>, keepalive = false): Promise<T> {
   const res = await apiFetch(`/api/cameras/${encodeURIComponent(cameraId)}/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,9 +50,25 @@ async function postStream<T>(cameraId: string, body: Record<string, string>, kee
   if (!res.ok) {
     const err: StreamError = new Error(data.error || `Request failed (${res.status})`);
     err.code = data.code;
+    if (res.status === 429 || data.code === "RESOURCE_EXHAUSTED") {
+      const ra = Number(res.headers.get("Retry-After"));
+      err.retryAfterMs = Number.isFinite(ra) && ra > 0 ? ra * 1000 : RATE_LIMIT_PAUSE_MS;
+      pauseFor(err.retryAfterMs); // hold every tile, not just this one
+    }
     throw err;
   }
   return data;
+}
+
+/** Every Google camera command goes through the shared per-tab budget. 0 = renew, 1 = start, 2 = stop. */
+function postStream<T>(cameraId: string, body: Record<string, string>, priority: 0 | 1 | 2, cancelled: () => boolean = () => false): Promise<T> {
+  return schedule(priority, () => postStreamNow<T>(cameraId, body), cancelled);
+}
+
+function stopSession(cameraId: string, mediaSessionId: string, unloading = false) {
+  // On page unload only a keepalive fetch survives; otherwise queue it at the lowest priority.
+  const p = unloading ? postStreamNow(cameraId, { stop: mediaSessionId }, true) : postStream(cameraId, { stop: mediaSessionId }, 2);
+  void p.catch(() => {});
 }
 
 /** natural: frame follows the stream's own shape. wide: every tile is 16:9 and the video fills it (portrait feeds get cropped). */
@@ -74,6 +93,10 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
   const [aspect, setAspect] = useState<number | null>(null);
   // Last known shape for this camera on this device, so tiles don't jump on later loads.
   const [savedAspect, setSavedAspect] = useLocalStorageState<number | null>(`homeops:aspect:${camera.id}`, null);
+  // Only spend Google quota on tiles someone can actually see.
+  const pageActive = usePageActive(HIDDEN_GRACE_MS);
+  const inView = useInView(frameRef, OFFSCREEN_GRACE_MS);
+  const active = pageActive && inView;
 
   const retryNow = useCallback(() => {
     backoffRef.current = 0;
@@ -82,7 +105,7 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
 
   // One WebRTC session per `attempt`. Cleanup tears it down; a retry bumps `attempt`.
   useEffect(() => {
-    if (!camera.webrtc) return;
+    if (!camera.webrtc || !active) return; // paused tiles are derived in render, nothing to start
     let cancelled = false;
     let pc: RTCPeerConnection | null = null;
     let mediaSessionId: string | null = null;
@@ -102,22 +125,37 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
         pc = null;
       }
       if (mediaSessionId) {
-        void postStream(camera.id, { stop: mediaSessionId }, true).catch(() => {});
+        stopSession(camera.id, mediaSessionId, unloading);
         mediaSessionId = null;
       }
       if (videoRef.current) videoRef.current.srcObject = null;
     };
+    let unloading = false;
+    const onUnload = () => {
+      unloading = true;
+    };
+    window.addEventListener("pagehide", onUnload);
 
-    const scheduleRetry = (why: string, asleep = false, rateLimited = false) => {
+    const scheduleRetry = (why: string, kind: "error" | "waking" | "throttled" = "error", retryAfterMs?: number) => {
       if (cancelled) return;
-      const n = backoffRef.current++;
-      const cap = n >= LONG_BACKOFF_AFTER ? BACKOFF_MAX_LONG_MS : BACKOFF_MAX_MS;
-      let delay = Math.min(cap, BACKOFF_BASE_MS * 2 ** n);
-      if (rateLimited) delay = Math.max(delay, RATE_LIMIT_MIN_DELAY_MS);
-      delay *= 0.8 + Math.random() * 0.4;
-      setStatus(asleep ? "waking" : "error");
+      let delay: number;
+      if (kind === "throttled") {
+        // Not the camera's fault: wait out Google's hold, then let the shared queue pace us. No exponential growth.
+        delay = (retryAfterMs ?? RATE_LIMIT_PAUSE_MS) + 1_000 + Math.random() * 4_000;
+      } else {
+        const n = backoffRef.current++;
+        const cap = n >= LONG_BACKOFF_AFTER ? BACKOFF_MAX_LONG_MS : BACKOFF_MAX_MS;
+        delay = Math.min(cap, BACKOFF_BASE_MS * 2 ** n) * (0.8 + Math.random() * 0.4);
+      }
+      setStatus(kind);
       setMessage(why);
       retryTimer = window.setTimeout(() => setAttempt((a) => a + 1), delay);
+    };
+
+    const classify = (e: StreamError): Parameters<typeof scheduleRetry> => {
+      if (e.code === "RESOURCE_EXHAUSTED") return ["Waiting for Google's camera quota", "throttled", e.retryAfterMs];
+      if (e.code === "FAILED_PRECONDITION" || /offline|asleep/i.test(e.message)) return ["Asleep, dead battery, or unplugged", "waking"];
+      return [e.message || "Could not start stream", "error"];
     };
 
     const scheduleExtend = (expiresAt: string) => {
@@ -125,13 +163,15 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
       extendTimer = window.setTimeout(async () => {
         if (cancelled || !mediaSessionId) return;
         try {
-          const r = await postStream<{ mediaSessionId: string; expiresAt: string }>(camera.id, { extend: mediaSessionId });
+          const r = await postStream<{ mediaSessionId: string; expiresAt: string }>(camera.id, { extend: mediaSessionId }, 0, () => cancelled);
           if (cancelled) return;
           mediaSessionId = r.mediaSessionId;
           scheduleExtend(r.expiresAt);
         } catch (e) {
+          if (cancelled) return;
           teardown();
-          scheduleRetry((e as Error).message || "Stream expired");
+          const err = e as StreamError;
+          scheduleRetry(...(err.code ? classify(err) : [err.message || "Stream expired", "error"] as Parameters<typeof scheduleRetry>));
         }
       }, ms);
     };
@@ -139,12 +179,6 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
     const start = async () => {
       setStatus("connecting");
       setMessage(null);
-
-      // First attempt only: stagger by tile index so a big grid doesn't burst the SDM quota.
-      if (attempt === 0 && index > 0) {
-        await new Promise((r) => window.setTimeout(r, index * STAGGER_MS));
-        if (cancelled) return;
-      }
 
       const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       pc = conn;
@@ -204,11 +238,14 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
       await waitForIceGathering(conn, ICE_GATHER_TIMEOUT_MS);
       if (cancelled || !conn.localDescription) return;
 
-      const r = await postStream<{ answerSdp: string; mediaSessionId: string; expiresAt: string }>(camera.id, {
-        offerSdp: conn.localDescription.sdp,
-      });
+      const r = await postStream<{ answerSdp: string; mediaSessionId: string; expiresAt: string }>(
+        camera.id,
+        { offerSdp: conn.localDescription.sdp },
+        1,
+        () => cancelled,
+      );
       if (cancelled) {
-        void postStream(camera.id, { stop: r.mediaSessionId }, true).catch(() => {});
+        stopSession(camera.id, r.mediaSessionId);
         return;
       }
       mediaSessionId = r.mediaSessionId;
@@ -219,30 +256,25 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
     start().catch((e: StreamError) => {
       if (cancelled) return;
       teardown();
-      const asleep = e.code === "FAILED_PRECONDITION" || /offline|asleep/i.test(e.message);
-      const rateLimited = e.code === "RESOURCE_EXHAUSTED";
-      scheduleRetry(asleep ? "Asleep, dead battery, or unplugged" : e.message || "Could not start stream", asleep, rateLimited);
+      scheduleRetry(...classify(e));
     });
 
     return () => {
       cancelled = true;
       window.clearTimeout(retryTimer);
+      window.removeEventListener("pagehide", onUnload);
       teardown();
     };
-  }, [camera.id, camera.webrtc, attempt, index]);
+  }, [camera.id, camera.webrtc, attempt, active]);
 
-  // Coming back to the tab or regaining network: reconnect immediately if we are down.
+  // Network back: reconnect immediately if we are down. (Tab/viewport changes are handled by `active`.)
   useEffect(() => {
     if (!camera.webrtc) return;
-    const onWake = () => {
-      if (document.visibilityState === "visible" && (status === "error" || status === "waking")) retryNow();
+    const onOnline = () => {
+      if (status === "error" || status === "waking" || status === "throttled") retryNow();
     };
-    document.addEventListener("visibilitychange", onWake);
-    window.addEventListener("online", onWake);
-    return () => {
-      document.removeEventListener("visibilitychange", onWake);
-      window.removeEventListener("online", onWake);
-    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
   }, [camera.webrtc, status, retryNow]);
 
   const toggleMute = () => {
@@ -261,12 +293,17 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
   };
 
   const label = `Cam ${String(index + 1).padStart(2, "0")} · ${camera.name}`;
+  // Pause is a property of the page/viewport, not of the stream, so derive it rather than store it.
+  const shown: Status = camera.webrtc && !active ? "paused" : status;
+  const shownMessage = shown === "paused" ? (pageActive ? "Off screen" : "Tab in background") : message;
   const statusMeta: Record<Status, { text: string; className: string }> = {
     live: { text: "Live", className: "text-ok" },
     connecting: { text: "Connecting", className: "text-accent" },
     waking: { text: "Waking", className: "text-warn" },
+    throttled: { text: "Quota", className: "text-warn" },
     error: { text: "Offline", className: "text-danger" },
     unsupported: { text: "Unsupported", className: "text-muted" },
+    paused: { text: "Paused", className: "text-muted" },
   };
 
   return (
@@ -278,8 +315,8 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
       <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-1.5">
         <h2 className="label truncate text-accent">{label}</h2>
         <div className="flex items-center gap-2">
-          {status === "live" ? <span className="status-dot" aria-hidden="true" /> : null}
-          <span className={`label ${statusMeta[status].className}`}>{statusMeta[status].text}</span>
+          {shown === "live" ? <span className="status-dot" aria-hidden="true" /> : null}
+          <span className={`label ${statusMeta[shown].className}`}>{statusMeta[shown].text}</span>
         </div>
       </header>
 
@@ -306,27 +343,32 @@ export function CameraTile({ camera, index, shape, expanded, onToggleExpand }: P
               if (Math.abs((savedAspect ?? 0) - ratio) > 0.01) setSavedAspect(ratio);
             }
           }}
-          className={`absolute inset-0 h-full w-full transition-opacity ${shape === "wide" ? "object-cover" : "object-contain"} ${status === "live" ? "opacity-100" : "opacity-0"}`}
+          className={`absolute inset-0 h-full w-full transition-opacity ${shape === "wide" ? "object-cover" : "object-contain"} ${shown === "live" ? "opacity-100" : "opacity-0"}`}
         />
 
-        {status !== "live" ? (
+        {shown !== "live" ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center">
-            {status === "connecting" ? (
+            {shown === "connecting" ? (
               <>
                 <span className="label text-accent">Negotiating stream</span>
                 <span className="label text-[10px] text-muted">Battery cameras can take a few seconds</span>
               </>
-            ) : status === "unsupported" ? (
+            ) : shown === "unsupported" ? (
               <>
                 <span className="label text-muted">RTSP-only camera</span>
                 <span className="label text-[10px] text-muted">WebRTC not offered by this device · not supported in v1</span>
               </>
+            ) : shown === "paused" ? (
+              <>
+                <span className="label text-muted">Stream released</span>
+                <span className="label text-[10px] text-muted">{shownMessage} · resumes automatically</span>
+              </>
             ) : (
               <>
-                <span className={`label ${status === "waking" ? "text-warn" : "text-danger"}`}>
-                  {status === "waking" ? "Camera asleep or offline" : "No signal"}
+                <span className={`label ${shown === "error" ? "text-danger" : "text-warn"}`}>
+                  {shown === "waking" ? "Camera asleep or offline" : shown === "throttled" ? "Google quota busy" : "No signal"}
                 </span>
-                {message ? <span className="label text-[10px] text-muted">{message}</span> : null}
+                {shownMessage ? <span className="label text-[10px] text-muted">{shownMessage}</span> : null}
                 <span className="label text-[10px] text-muted">Retrying automatically</span>
                 <button
                   type="button"

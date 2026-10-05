@@ -6,6 +6,7 @@ import { CameraTile, type TileShape } from "@/components/camera-tile";
 import { Panel } from "@/components/panel";
 import { useLocalStorageState } from "@/lib/use-local-storage";
 import { apiFetch } from "@/lib/client-fetch";
+import { useStreamBudget } from "@/lib/stream-budget";
 
 const REFRESH_LIST_MS = 10 * 60 * 1000;
 const MIN_COLS = 1;
@@ -21,6 +22,8 @@ export function CameraGrid({ initialCameras = null }: { initialCameras?: Camera[
   const [expanded, setExpanded] = useState<string | null>(null);
   const [storedPrefs, setPrefs] = useLocalStorageState<GridPrefs>("homeops:grid:v1", DEFAULT_PREFS);
   const prefs = storedPrefs ?? DEFAULT_PREFS;
+  const budget = useStreamBudget();
+  const pausedFor = budget.pausedForSeconds;
 
   const load = useCallback(async (force = false) => {
     try {
@@ -66,8 +69,19 @@ export function CameraGrid({ initialCameras = null }: { initialCameras?: Camera[
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <h1 className="label text-muted">
-          Live feeds · <span className="text-foreground">{cameras ? count : "--"}</span> {count === 1 ? "camera" : "cameras"}
+        <h1 className="label flex flex-wrap items-center gap-x-3 text-muted">
+          <span>
+            Live feeds · <span className="text-foreground">{cameras ? count : "--"}</span> {count === 1 ? "camera" : "cameras"}
+          </span>
+          {pausedFor > 0 ? (
+            <span className="text-warn" title="Google limits camera commands per minute; all tiles wait together.">
+              Google quota hold · {pausedFor}s
+            </span>
+          ) : budget.queued > 0 ? (
+            <span className="text-accent/80" title="Commands are spaced out to stay under Google's per-minute limit.">
+              {budget.queued} queued
+            </span>
+          ) : null}
         </h1>
 
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
